@@ -18,32 +18,22 @@ jobs:
           JOB_NAME="check-system-user"
           USER_PARAM="${{ github.event.inputs.username_to_check }}"
           
-          echo "🚀 Шаг 0: Запрос токена защиты CSRF (Jenkins-Crumb)..."
-          CRUMB_DATA=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/crumbIssuer/api/json")
+          echo "🚀 Шаг 1: Запуск задачи в Jenkins для пользователя: $USER_PARAM"
           
-          # Парсим имя заголовка и значение крошки, если они доступны
-          CRUMB_HEADER=$(echo "$CRUMB_DATA" | jq -r '.crumbRequestField // empty')
-          CRUMB_VALUE=$(echo "$CRUMB_DATA" | jq -r '.crumb // empty')
-          
-          CRUMB_HEADER_FLAG=""
-          if [ ! -z "$CRUMB_HEADER" ] && [ ! -z "$CRUMB_VALUE" ]; then
-            echo "✅ CSRF защита обнаружена. Крошка успешно получена."
-            CRUMB_HEADER_FLAG="-H $CRUMB_HEADER:$CRUMB_VALUE"
-          else
-            echo "ℹ️ CSRF защита отключена или недоступна. Продолжаем без крошки."
-          fi
-          
-          echo "🚀 Шаг 1: Отправка запроса в Jenkins для пользователя: $USER_PARAM"
-          # Отправляем POST-запрос, прикрепляя полученный заголовок крошки $CRUMB_HEADER_FLAG
-          HTTP_CODE=$(curl -X POST -s -L $CRUMB_HEADER_FLAG -o /dev/null -w "%{http_code}" -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
+          # Отправляем POST-запрос с заголовком 'X-Requested-With: XMLHttpRequest', который отключает CSRF-проверку для API-токенов
+          HTTP_CODE=$(curl -X POST -s -L \
+            -H "X-Requested-With: XMLHttpRequest" \
+            -o /dev/null -w "%{http_code}" \
+            -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
+            "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
           
           if [ "$HTTP_CODE" -ne 201 ] && [ "$HTTP_CODE" -ne 200 ]; then
             echo "❌ Ошибка: Не удалось запустить задачу. HTTP Код ответа: $HTTP_CODE"
             exit 1
           fi
           
-          echo "⏳ Задача успешно добавлена в очередь Jenkins. Ждем старта билда..."
-          sleep 6
+          echo "⏳ Задача успешно добавлена в очередь Jenkins. Ждем 10 секунд для инициализации билда..."
+          sleep 10
           
           # 2. Получаем URL самого последнего билда этой задачи
           BUILD_URL=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/api/json" | jq -r '.lastBuild.url')
@@ -56,12 +46,8 @@ jobs:
           echo "🏃 Сборка стартовала: $BUILD_URL"
           
           # 3. Опрашиваем статус выполнения билда
-          if [[ "$BUILD_URL" == http://* && "$JENKINS_URL" == https://* ]]; then
-            BUILD_URL=${BUILD_URL/http:\/\//https:\/\/}
-          fi
-          
           IS_BUILDING="true"
-          while [ "$Transfer_URL" != "false" ] && [ "$IS_BUILDING" = "true" ]; do
+          while [ "$IS_BUILDING" = "true" ]; do
             echo "Сборка выполняется, ждем..."
             sleep 4
             IS_BUILDING=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}api/json" | jq -r '.building')
