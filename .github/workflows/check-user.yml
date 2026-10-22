@@ -18,32 +18,28 @@ jobs:
           JOB_NAME="check-system-user"
           USER_PARAM="${{ github.event.inputs.username_to_check }}"
           
-          echo "🚀 Шаг 0: Получение текстового CSRF токена..."
-          # Запрашиваем crumb в формате чистой строки вида "Jenkins-Crumb:значение_токена"
-          CRUMB_STRING=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/crumbIssuer/api/xml?xpath=concat(string(/*/crumbRequestField),%22:%22,string(/*/crumb))")
-          
-          CRUMB_HEADER_FLAG=""
-          if [ ! -z "$CRUMB_STRING" ] && [[ "$CRUMB_STRING" == *":"* ]]; then
-            echo "✅ CSRF токен успешно получен."
-            CRUMB_HEADER_FLAG="-H $CRUMB_STRING"
-          else
-            echo "ℹ️ Не удалось получить токен, пробуем отправить запрос напрямую."
-          fi
-          
           echo "🚀 Шаг 1: Запуск задачи в Jenkins для пользователя: $USER_PARAM"
-          # Отправляем запрос, передавая полученный флаг заголовка
-          HTTP_CODE=$(curl -X POST -s -L $CRUMB_HEADER_FLAG -o /dev/null -w "%{http_code}" -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
+          
+          # Кодируем логин и токен в формат Base64 для передачи в чистом заголовке Authorization (это обходит CSRF)
+          AUTH_BASE64=$(echo -n "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" | base64)
+          
+          # Отправляем POST-запрос с явными заголовками авторизации и веб-вызова
+          HTTP_CODE=$(curl -X POST -s -L \
+            -H "Authorization: Basic $AUTH_BASE64" \
+            -H "X-Requested-With: XMLHttpRequest" \
+            -o /dev/null -w "%{http_code}" \
+            "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
           
           if [ "$HTTP_CODE" -ne 201 ] && [ "$HTTP_CODE" -ne 200 ]; then
             echo "❌ Ошибка: Не удалось запустить задачу. HTTP Код ответа: $HTTP_CODE"
             exit 1
           fi
           
-          echo "⏳ Задача успешно добавлена в очередь Jenkins. Ждем 10 секунд для инициализации билда..."
-          sleep 10
+          echo "⏳ Задача успешно добавлена в очередь Jenkins. Ждем старта билда..."
+          sleep 8
           
           # 2. Получаем URL самого последнего билда этой задачи
-          BUILD_URL=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/api/json" | jq -r '.lastBuild.url')
+          BUILD_URL=$(curl -s -L -H "Authorization: Basic $AUTH_BASE64" "$JENKINS_URL/job/$JOB_NAME/api/json" | jq -r '.lastBuild.url')
           
           if [ -z "$BUILD_URL" ] || [ "$BUILD_URL" = "null" ]; then
             echo "❌ Не удалось определить URL запущенного билда."
@@ -57,12 +53,12 @@ jobs:
           while [ "$IS_BUILDING" = "true" ]; do
             echo "Сборка выполняется, ждем..."
             sleep 4
-            IS_BUILDING=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}api/json" | jq -r '.building')
+            IS_BUILDING=$(curl -s -L -H "Authorization: Basic $AUTH_BASE64" "${BUILD_URL}api/json" | jq -r '.building')
           done
           
           echo "✅ Сборка в Jenkins успешно завершена!"
           
           # 4. Читаем лог сборки и выводим вердикт
           echo "=== ФИНАЛЬНЫЙ ВЕРДИКТ ИЗ JENKINS ==="
-          curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}logText/progressiveText?start=0" | grep "RESULT:" || echo "Строка результата не найдена в логах."
+          curl -s -L -H "Authorization: Basic $AUTH_BASE64" "${BUILD_URL}logText/progressiveText?start=0" | grep "RESULT:" || echo "Строка результата не найдена в логах."
           echo "====================================="
