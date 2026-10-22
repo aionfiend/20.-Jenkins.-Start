@@ -1,80 +1,69 @@
-name: Check Jenkins User System
+name: Check user in /etc/passwd
 
 on:
   workflow_dispatch:
     inputs:
-      username_to_check:
-        description: 'Имя пользователя для проверки в /etc/passwd'
+      username:
+        description: 'Username to check in /etc/passwd'
         required: true
         default: 'root'
 
 jobs:
-  trigger-jenkins:
-    runs-on: ubuntu-latest
+  check-user:
+    runs-on: [self-hosted, linux, ARM64]
     steps:
-      - name: Trigger Jenkins Job and Get Result
+      - name: Trigger Jenkins job via API
+        id: trigger
         run: |
-          JENKINS_URL="http://${{ secrets.JENKINS_HOST }}"
-          JOB_NAME="check-system-user"
-          USER_PARAM="${{ github.event.inputs.username_to_check }}"
-          
-          echo "🚀 Шаг 1: Отправка JSON-вебхука в Jenkins для пользователя: $USER_PARAM"
-          
-          # Отправляем POST-запрос на специальный эндпоинт плагина Generic Webhook Trigger.
-          HTTP_CODE=$(curl -X POST -s -L \
-            -H "Content-Type: application/json" \
-            -H "Host: jenkins.k8s-1.sa" \
-            -o /dev/null -w "%{http_code}" \
-            -d "{\"username\": \"$USER_PARAM\"}" \
-            "$JENKINS_URL/generic-webhook-trigger/invoke?token=my-super-secret-token")
-          
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "❌ Ошибка: Не удалось вызвать вебхук. HTTP Код ответа: $HTTP_CODE"
-            exit 1
-          fi
-          
-          echo "⏳ Вебхук успешно принят. Ожидаем 12 секунд для инициализации и старта билда..."
-          sleep 12
-          
-          # Кодируем креды в Base64 для безопасного чтения API
-          AUTH_BASE64=$(echo -n "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" | base64)
-          
-          # 2. Получаем URL самого последнего билда этой задачи (ДОБАВЛЕНЫ ЗАГОЛОВКИ И -L)
-          BUILD_URL=$(curl -s -L \
-            -H "Authorization: Basic $AUTH_BASE64" \
-            -H "Host: jenkins.k8s-1.sa" \
-            "$JENKINS_URL/job/$JOB_NAME/api/json" | jq -r '.lastBuild.url // empty')
-          
-          if [ -z "$BUILD_URL" ] || [ "$BUILD_URL" = "null" ]; then
-            echo "❌ Не удалось определить URL запущенного билда через API проекта."
-            exit 1
-          fi
-          
-          # Если Jenkins внутри k8s сгенерировал ссылку с внутренним доменом http://k8s-1.sa,
-          # подменяем её на внешний адрес ngrok, чтобы GitHub Actions смог продолжить опрос
-          if [[ "$BUILD_URL" == *"jenkins.k8s-1.sa"* ]]; then
-            BUILD_URL="${BUILD_URL/http:\/\/jenkins.k8s-1.sa/$JENKINS_URL}"
-          fi
-          
-          echo "🏃 Сборка стартовала: $BUILD_URL"
-          
-          # 3. Опрашиваем статус выполнения билда, передавая Host-header для прохода через Ingress
-          IS_BUILDING="true"
-          while [ "$IS_BUILDING" = "true" ]; do
-            echo "Сборка выполняется, ждем..."
-            sleep 4
-            IS_BUILDING=$(curl -s -L \
-              -H "Authorization: Basic $AUTH_BASE64" \
-              -H "Host: jenkins.k8s-1.sa" \
-              "${BUILD_URL}api/json" | jq -r '.building')
+          RESPONSE=$(curl -s -i -X POST \
+            "${{ secrets.JENKINS_URL }}/job/check-user/buildWithParameters" \
+            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+            --data-urlencode "username=${{ inputs.username }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | head -n 1 | awk '{print $2}')
+          [ "$HTTP_CODE" = "201" ] || { echo "Trigger failed (HTTP $HTTP_CODE)"; echo "$RESPONSE"; exit 1; }
+
+          # Jenkins returns the queue item URL in the Location header
+          QUEUE_URL=$(echo "$RESPONSE" | grep -i '^location:' | awk '{print $2}' | tr -d '\r')
+          echo "Queued: $QUEUE_URL"
+          echo "queue_url=$QUEUE_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for build to start
+        id: start
+        run: |
+          BUILD_URL=""
+          for i in {1..30}; do
+            BUILD_URL=$(curl -s -L --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+              "${{ steps.trigger.outputs.queue_url }}/api/json" | jq -r '.executable.url // empty')
+            [ -n "$BUILD_URL" ] && break
+            sleep 2
           done
-          
-          echo "✅ Сборка в Jenkins успешно завершена!"
-          
-          # 4. Читаем лог сборки обратно с использованием Host-header
-          echo "=== ФИНАЛЬНЫЙ ВЕРДИКТ ИЗ JENKINS ==="
-          curl -s -L \
-            -H "Authorization: Basic $AUTH_BASE64" \
-            -H "Host: jenkins.k8s-1.sa" \
-            "${BUILD_URL}logText/progressiveText?start=0" | grep "RESULT:" || echo "Строка результата не найдена в логах."
-          echo "====================================="
+          [ -z "$BUILD_URL" ] && { echo "Build never started"; exit 1; }
+          echo "build_url=$BUILD_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for build to finish
+        id: build
+        run: |
+          RESULT=""
+          for i in {1..60}; do
+            RESULT=$(curl -s -L --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+              "${{ steps.start.outputs.build_url }}/api/json" | jq -r '.result // empty')
+            [ -n "$RESULT" ] && break
+            sleep 3
+          done
+          [ -z "$RESULT" ] && { echo "Build did not finish in time"; exit 1; }
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Show Jenkins output and result
+        run: |
+          curl -s -L --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+            "${{ steps.start.outputs.build_url }}consoleText"
+
+          LOG=$(curl -s -L --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_API_TOKEN }}" \
+            "${{ steps.start.outputs.build_url }}consoleText")
+
+          if echo "$LOG" | grep -q "USER_CHECK_RESULT=EXISTS"; then
+            echo "✅ User '${{ inputs.username }}' EXISTS in /etc/passwd"
+          else
+            echo "❌ User '${{ inputs.username }}' does NOT exist in /etc/passwd"
+          fi
