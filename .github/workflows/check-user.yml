@@ -1,42 +1,56 @@
-- name: Trigger Jenkins Job and Get Result
-  run: |
-    JENKINS_URL="http://${{ secrets.JENKINS_HOST }}"
-    JOB_NAME="check-system-user"
-    USER_PARAM="${{ github.event.inputs.username_to_check }}"
-    
-    echo "🚀 Отправка запроса в Jenkins для пользователя: $USER_PARAM"
-    
-    # 1. Триггерим задачу (команда объединена в одну строку)
-    QUEUE_URL=$(curl -X POST -s -I -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM" | grep -i location | awk '{print $2}' | tr -d '\r')
-    
-    if [ -z "$QUEUE_URL" ]; then
-      echo "❌ Ошибка: Не удалось запустить задачу. Проверьте секреты, доступность хоста и имя задачи."
-      exit 1
-    fi
-    
-    echo "⏳ Задача успешно добавлена в очередь Jenkins: $QUEUE_URL"
-    
-    # 2. Ждем, пока задача выйдет из очереди Jenkins и начнется реальный билд
-    BUILD_URL=""
-    while [ -z "$BUILD_URL" ] || [ "$BUILD_URL" = "null" ]; do
-      echo "Ожидание распределения на воркер..."
-      sleep 3
-      BUILD_URL=$(curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${QUEUE_URL}api/json" | jq -r '.executable.url // empty')
-    done
-    
-    echo "🏃 Сборка стартовала: $BUILD_URL"
-    
-    # 3. Опрашиваем Jenkins API, пока флаг building не станет равным false
-    IS_BUILDING="true"
-    while [ "$IS_BUILDING" = "true" ]; do
-      echo "Сборка выполняется, ждем..."
-      sleep 4
-      IS_BUILDING=$(curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}api/json" | jq -r '.building')
-    done
-    
-    echo "✅ Сборка в Jenkins успешно завершена!"
-    
-    # 4. Читаем лог сборки обратно в консоль GitHub Actions
-    echo "=== ФИНАЛЬНЫЙ ВЕРДИКТ ИЗ JENKINS ==="
-    curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}logText/progressiveText?start=0" | grep "RESULT:" || echo "Строка результата не найдена в логах."
-    echo "====================================="
+name: Check Jenkins User System
+
+on:
+  workflow_dispatch:
+    inputs:
+      username_to_check:
+        description: 'Имя пользователя для проверки в /etc/passwd'
+        required: true
+        default: 'root'
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Jenkins Job and Get Result
+        run: |
+          JENKINS_URL="http://${{ secrets.JENKINS_HOST }}"
+          JOB_NAME="check-system-user"
+          USER_PARAM="${{ github.event.inputs.username_to_check }}"
+          
+          echo "🚀 Отправка запроса в Jenkins для пользователя: $USER_PARAM"
+          
+          # 1. Триггерим задачу в одну строку без разрывов синтаксиса
+          QUEUE_URL=$(curl -X POST -s -I -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM" | grep -i location | awk '{print $2}' | tr -d '\r')
+          
+          if [ -z "$QUEUE_URL" ]; then
+            echo "❌ Ошибка: Не удалось запустить задачу. Проверьте секреты, доступность хоста и имя задачи."
+            exit 1
+          fi
+          
+          echo "⏳ Задача успешно добавлена в очередь Jenkins: $QUEUE_URL"
+          
+          # 2. Ждем распределения на воркер
+          BUILD_URL=""
+          while [ -z "$BUILD_URL" ] || [ "$BUILD_URL" = "null" ]; do
+            echo "Ожидание распределения на воркер..."
+            sleep 3
+            BUILD_URL=$(curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${QUEUE_URL}api/json" | jq -r '.executable.url // empty')
+          done
+          
+          echo "🏃 Сборка стартовала: $BUILD_URL"
+          
+          # 3. Опрашиваем статус выполнения
+          IS_BUILDING="true"
+          while [ "$IS_BUILDING" = "true" ]; do
+            echo "Сборка выполняется, ждем..."
+            sleep 4
+            IS_BUILDING=$(curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}api/json" | jq -r '.building')
+          done
+          
+          echo "✅ Сборка в Jenkins успешно завершена!"
+          
+          # 4. Читаем лог сборки обратно
+          echo "=== ФИНАЛЬНЫЙ ВЕРДИКТ ИЗ JENKINS ==="
+          curl -s -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "${BUILD_URL}logText/progressiveText?start=0" | grep "RESULT:" || echo "Строка результата не найдена в логах."
+          echo "====================================="
