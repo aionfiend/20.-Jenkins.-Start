@@ -21,5 +21,19 @@ XML-файлов и папок внутри единого каталога JENK
 
 
     #Task №2
+   Use ngrok
+   ngrok                                                                                                                                                                                                                   (Ctrl+C to quit)
 
+Jev is on ngrok.ai
+
+Session Status                online                                                                                                                                                                                                    
+Account                       aion.fiend@gmail.com (Plan: Free)                                                                                                                                                                         
+Version                       3.39.12                                                                                                                                                                                                   
+Region                        Europe (eu)                                                                                                                                                                                               
+Latency                       41ms                                                                                                                                                                                                      
+Web Interface                 http://127.0.0.1:4040                                                                                                                                                                                     
+Forwarding                    https://pushcart-overlord-snub.ngrok-free.dev -> http://jenkins.k8s-1.sa:80
+
+Connections                   ttl     opn     rt1     rt5     p50     p90                                                                                                                                                               
+12      0       0.00    0.00    65.19   65.99    
 curl -X POST -u "admin:115238efe1094d3e1c89f957c9a8a345a0" "http://jenkins.k8s-1.sa/job/check-system-user/buildWithParameters?USERNAME=root"
