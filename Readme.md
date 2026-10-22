@@ -21,7 +21,8 @@ XML-файлов и папок внутри единого каталога JENK
 
 
     #Task №2
-   Use ngrok
+В ходе работы была успешно спроектирована и развернута автоматизированная сквозная цепочка:
+GitHub Actions → ngrok-туннель → Kubernetes Ingress → Jenkins Pipeline.
    ngrok                                                                                                                                                                                                                   (Ctrl+C to quit)
 
 Jev is on ngrok.ai

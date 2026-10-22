@@ -1,0 +1,57 @@
+pipeline {
+    agent any
+
+    triggers {
+        // Заставляет Jenkins слушать вебхуки, приходящие на адрес /github-webhook/
+        githubPush()
+    }
+
+    parameters {
+        string(name: 'USERNAME', defaultValue: 'root', description: 'Имя пользователя')
+    }
+
+    stages {
+        stage('Filter Changes') {
+            steps {
+                script {
+                    // Проверяем, пришел ли запуск от вебхука GitHub (Push)
+                    if (currentBuild.getBuildCauses().toString().contains('GitHubPushCause')) {
+
+                        // Проверяем, есть ли слово 'main' в путях измененных файлов коммита
+                        def fileChanged = currentBuild.changeSets.any { set ->
+                            set.items.any { item ->
+                                item.affectedPaths.any { path -> path.contains('main') }
+                            }
+                        }
+
+                        if (!fileChanged) {
+                            // Если файл 'main' не менялся, отменяем билд
+                            currentBuild.result = 'ABORTED'
+                            error("Сборка отменена: изменения не затрагивают файл 'main'")
+                        } else {
+                            echo "✅ Обнаружены изменения в файле 'main'. Продолжаем работу..."
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Check User & Report') {
+            steps {
+                script {
+                    def statusCode = sh(script: "getent passwd ${params.USERNAME}", returnStatus: true)
+                    def resultMessage = ""
+
+                    if (statusCode == 0) {
+                        resultMessage = "RESULT: User '${params.USERNAME}' EXISTS in the system."
+                    } else {
+                        resultMessage = "RESULT: User '${params.USERNAME}' DOES NOT exist."
+                    }
+
+                    echo resultMessage
+                    sh "echo '${resultMessage}'"
+                }
+            }
+        }
+    }
+}
