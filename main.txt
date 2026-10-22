@@ -1,10 +1,7 @@
 pipeline {
     agent any
 
-    triggers {
-        // Заставляет Jenkins слушать вебхуки, приходящие на адрес /github-webhook/
-        githubPush()
-    }
+    // Встроенные триггеры больше не нужны, так как плагин Generic Webhook Trigger уже включен галочкой в UI
 
     parameters {
         string(name: 'USERNAME', defaultValue: 'root', description: 'Имя пользователя')
@@ -14,20 +11,23 @@ pipeline {
         stage('Filter Changes') {
             steps {
                 script {
-                    // Проверяем, пришел ли запуск от вебхука GitHub (Push)
-                    if (currentBuild.getBuildCauses().toString().contains('GitHubPushCause')) {
+                    // Проверяем, пришел ли запуск от плагина Generic Webhook Trigger
+                    if (currentBuild.getBuildCauses().toString().contains('GenericWebhookCause')) {
 
-                        // Проверяем, есть ли слово 'main' в путях измененных файлов коммита
+                        // GitHub при пуше присылает массив коммитов и список измененных файлов.
+                        // Проверяем, содержит ли лог изменений упоминание файла 'main'
                         def fileChanged = currentBuild.changeSets.any { set ->
                             set.items.any { item ->
                                 item.affectedPaths.any { path -> path.contains('main') }
                             }
                         }
 
+                        // Если вы тестируете без коммитов в git, а просто шлете JSON из GitHub,
+                        // для учебных целей можно временно разрешить выполнение, убрав этот if/else,
+                        // но для задания логика отмены выглядит так:
                         if (!fileChanged) {
-                            // Если файл 'main' не менялся, отменяем билд
                             currentBuild.result = 'ABORTED'
-                            error("Сборка отменена: изменения не затрагивают файл 'main'")
+                            error("Сборка отменена: в коммите не найден файл 'main'")
                         } else {
                             echo "✅ Обнаружены изменения в файле 'main'. Продолжаем работу..."
                         }
