@@ -18,14 +18,21 @@ jobs:
           JOB_NAME="check-system-user"
           USER_PARAM="${{ github.event.inputs.username_to_check }}"
           
-          echo "🚀 Шаг 1: Запуск задачи в Jenkins для пользователя: $USER_PARAM"
+          echo "🚀 Шаг 0: Получение текстового CSRF токена..."
+          # Запрашиваем crumb в формате чистой строки вида "Jenkins-Crumb:значение_токена"
+          CRUMB_STRING=$(curl -s -L -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/crumbIssuer/api/xml?xpath=concat(string(/*/crumbRequestField),%22:%22,string(/*/crumb))")
           
-          # Отправляем POST-запрос с заголовком 'X-Requested-With: XMLHttpRequest', который отключает CSRF-проверку для API-токенов
-          HTTP_CODE=$(curl -X POST -s -L \
-            -H "X-Requested-With: XMLHttpRequest" \
-            -o /dev/null -w "%{http_code}" \
-            -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
-            "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
+          CRUMB_HEADER_FLAG=""
+          if [ ! -z "$CRUMB_STRING" ] && [[ "$CRUMB_STRING" == *":"* ]]; then
+            echo "✅ CSRF токен успешно получен."
+            CRUMB_HEADER_FLAG="-H $CRUMB_STRING"
+          else
+            echo "ℹ️ Не удалось получить токен, пробуем отправить запрос напрямую."
+          fi
+          
+          echo "🚀 Шаг 1: Запуск задачи в Jenkins для пользователя: $USER_PARAM"
+          # Отправляем запрос, передавая полученный флаг заголовка
+          HTTP_CODE=$(curl -X POST -s -L $CRUMB_HEADER_FLAG -o /dev/null -w "%{http_code}" -u "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" "$JENKINS_URL/job/$JOB_NAME/buildWithParameters?USERNAME=$USER_PARAM")
           
           if [ "$HTTP_CODE" -ne 201 ] && [ "$HTTP_CODE" -ne 200 ]; then
             echo "❌ Ошибка: Не удалось запустить задачу. HTTP Код ответа: $HTTP_CODE"
