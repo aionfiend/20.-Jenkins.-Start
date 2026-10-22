@@ -36,4 +36,4 @@ Forwarding                    https://pushcart-overlord-snub.ngrok-free.dev -> h
 
 Connections                   ttl     opn     rt1     rt5     p50     p90                                                                                                                                                               
 12      0       0.00    0.00    65.19   65.99    
-curl -X POST -u "admin:115238efe1094d3e1c89f957c9a8a345a0" "http://jenkins.k8s-1.sa/job/check-system-user/buildWithParameters?USERNAME=root"
+curl -X POST -u "admin:xxxxxxxxxxxxx" "http://jenkins.k8s-1.sa/job/check-system-user/buildWithParameters?USERNAME=root"
